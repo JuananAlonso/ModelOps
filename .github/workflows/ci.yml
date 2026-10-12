@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Install package and development tools
+        run: uv sync --locked --no-editable
+
+      - name: Lint
+        run: uv run --locked --no-editable ruff check .
+
+      - name: Check formatting
+        run: uv run --locked --no-editable ruff format --check .
+
+      - name: Test installed package
+        run: uv run --locked --no-editable pytest
+
+      - name: Build distributions
+        run: uv build
