@@ -1,5 +1,6 @@
 """Fixtures pequeñas y protección contra acceso de red durante los tests."""
 
+import os
 import socket
 from collections.abc import Iterator
 
@@ -8,6 +9,9 @@ import pytest
 from modelops.training.config import TrainingConfig
 from modelops.training.data import TabularDataset, load_demo_dataset
 from modelops.training.runner import TrainingResult, train_dataset
+
+# Antes de la colección/importación de los tests que usan MLflow.
+os.environ["MLFLOW_DISABLE_TELEMETRY"] = "true"
 
 
 @pytest.fixture(scope="session", autouse=True)
