@@ -8,7 +8,14 @@ version = "0.1.0"
 description = "Base modular para una plataforma MLOps."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "joblib>=1.5,<2",
+    "lightgbm>=4.6,<5",
+    "numpy>=2.2,<3",
+    "pandas>=2.3,<4",
+    "scikit-learn>=1.7,<2",
+    "threadpoolctl>=3.6,<4",
+]
 
 [dependency-groups]
 dev = [
@@ -16,8 +23,15 @@ dev = [
     "ruff>=0.14,<1",
 ]
 
+[project.scripts]
+modelops-train = "modelops.training.cli:main"
+
 [tool.uv]
 required-version = "==0.13.0"
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+default = true
 
 [tool.ruff]
 target-version = "py312"
