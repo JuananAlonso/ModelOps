@@ -38,6 +38,7 @@ jobs:
       - name: Test installed package
         env:
           UV_OFFLINE: "1"
+          MLFLOW_DISABLE_TELEMETRY: "true"
         run: uv run --locked --no-editable pytest
 
       - name: Build distributions
