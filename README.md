@@ -323,6 +323,27 @@ uv run --locked python scripts/compose_smoke.py
 La [guía de Compose](docs/mop-005-compose.md) explica la secuencia completa,
 cambio de versión, reinicio, copias, limpieza y diagnóstico.
 
+## Pruebas E2E y robustez — MOP-006
+
+La suite rápida comprueba contratos HTTP, paridad entre entrenamiento,
+Registry y API, artefactos y backend corruptos, versión fijada aunque aparezca
+una nueva, y ausencia de escrituras por petición. Usa SQLite y archivos
+temporales sin Docker ni red externa.
+
+La prueba de infraestructura se ejecuta por separado:
+
+```bash
+uv run --locked python scripts/compose_smoke.py \
+  --report artifacts/e2e/mop-006.json
+```
+
+Comprueba PostgreSQL y proxy de artefactos reales, caída del backend y
+persistencia tras recrear la pila. Crea y limpia su propio proyecto temporal;
+el informe incluye tiempos informativos de arranque, latencia y bytes de
+respuesta. CI ejecuta esta prueba después de la suite rápida y conserva el
+informe como artifact. El [manual MOP-006](docs/mop-006-e2e.md) detalla la matriz
+de casos, comandos, diagrama, diagnóstico y límites de las garantías.
+
 ## Comprobaciones
 
 ```bash
