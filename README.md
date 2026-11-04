@@ -5,6 +5,10 @@ El diseño prevé procesos separados para entrenamiento e inferencia. MOP-001
 estableció paquete, entorno y CI; MOP-002 añade entrenamiento y evaluación local
 de clasificación binaria con un baseline y LightGBM. MOP-003 añade tracking
 local y versiones iniciales de modelos con MLflow, desde una capa independiente.
+MOP-004 sirve una versión explícita mediante FastAPI, con validación de entradas
+y comprobaciones de salud, en un proceso separado del entrenamiento.
+MOP-005 permite ejecutar API, MLflow y PostgreSQL con Docker Compose y
+transferir artefactos por HTTP entre procesos.
 
 ## Requisitos
 
@@ -52,10 +56,11 @@ Las dependencias de entrenamiento son NumPy, pandas, scikit-learn, LightGBM,
 joblib y threadpoolctl. Todas se utilizan en el pipeline y quedan fijadas por
 el lockfile. MLflow **3.16.1** se instala para Tracking, Registry y UI. Su
 distribución completa amplía las dependencias transitivas; algunas incluyen
-componentes web y el SDK de Docker, pero esta entrega no implementa una API de
-inferencia ni utiliza Docker o cloud. El lockfile pasa de 20 a 98 paquetes
-resueltos contando las variantes de plataforma. La primera instalación puede
-tardar más; las siguientes reutilizan la caché de uv.
+componentes web y el SDK de Docker. FastAPI, Pydantic y Uvicorn implementan la
+API local; httpx permite probarla con TestClient. psycopg2-binary permite que
+MLflow utilice PostgreSQL en Compose. No se utiliza cloud.
+El lockfile contiene 101 paquetes resueltos contando variantes de plataforma.
+La primera instalación puede tardar más; las siguientes reutilizan la caché de uv.
 
 ## Entrenamiento local — MOP-002
 
@@ -128,7 +133,7 @@ El objeto incluye selección de columnas y transformaciones. Las columnas deben
 tener los nombres documentados en el manifiesto: el selector restablece su orden,
 falla si falta alguna y descarta columnas adicionales durante predicción. La
 validación de entrenamiento exige el esquema exacto; la validación explícita de
-entradas de una futura API pertenece a otra entrega.
+entradas HTTP se implementa en MOP-004 con esquema exacto y números finitos.
 
 Para datos, entorno, configuración y semilla iguales, se espera la misma
 partición y métricas/probabilidades iguales con `rtol=1e-9`, `atol=1e-12` en el
@@ -140,7 +145,7 @@ revisión con `dirty=true` no reproduce por sí sola cambios sin commit.
 Consulta la [guía técnica de MOP-002](docs/mop-002-training.md) para los contratos,
 las fórmulas, las alternativas y cómo extender el diseño. No hay imputación,
 variables categóricas, búsqueda de hiperparámetros, validación cruzada, selección
-automática ni serving. El comando local anterior no activa MLflow.
+automática en entrenamiento. El comando local anterior no activa MLflow.
 
 ## Tracking y Registry local — MOP-003
 
@@ -250,6 +255,74 @@ Los tests utilizan bases temporales independientes, sin servidor ni Internet.
 Consulta la [guía técnica de MOP-003](docs/mop-003-mlflow.md) para contratos,
 alternativas, seguridad, recuperación y las preguntas de revisión técnica.
 
+## Inferencia HTTP local — MOP-004
+
+Después de registrar modelos con MOP-003, consulta una versión concreta y
+arranca la API en otro proceso:
+
+```bash
+uv run --locked --offline modelops-mlflow-runs
+# Sustituye 1 por la versión revisada que muestre el comando anterior.
+uv run --locked --offline modelops-serve \
+  --model-name modelops-baseline --model-version 1
+```
+
+Escucha en `http://127.0.0.1:8000`. `/docs` documenta el contrato completo;
+`GET /health/live` devuelve 200 si el proceso responde y `GET /health/ready`
+solo devuelve 200 con el modelo cargado y comprobado. Si la carga falla, la
+API permanece viva con readiness 503; corrige el problema y reinicia.
+
+`POST /predict` recibe `{"instances": [fila, ...]}` con entre 1 y 256 filas,
+cada una con las 30 claves originales y valores numéricos finitos. Rechaza
+columnas ausentes o extra, strings numéricos, booleanos, null, NaN e infinitos
+con 422. La respuesta incluye `schema_version`, nombre/versión/URI del modelo,
+`classes`, `class_names` y `predictions` con etiqueta y probabilidades en el
+orden de `classes_`. Sigue siendo **un ejemplo técnico sin uso clínico**.
+
+La versión numérica es obligatoria: también puede fijarse mediante
+`MODELOPS_MODEL_VERSION`, con `MODELOPS_MODEL_NAME` opcional. Se carga una vez
+al arrancar, sin seleccionar `latest`, entrenar ni consultar Registry por
+petición. Comparte la configuración SQLite de MOP-003; los modelos deben
+tener procedencia fiable. No hay promoción automática ni autenticación pública.
+
+Consulta la [guía de MOP-004](docs/mop-004-serving.md) para el ejemplo `curl`
+completo, configuración, errores, pruebas de paridad y auditoría del siguiente
+paso. Docker Compose y PostgreSQL corresponden a MOP-005.
+
+## Docker Compose — MOP-005
+
+Desde la raíz del repositorio, con Docker y Compose instalados:
+
+```bash
+cp -n .env.example .env
+docker compose build
+docker compose up -d --wait mlflow
+docker compose run --rm train
+# Revisa nombre/versión en la salida y fíjalos en .env antes de iniciar API.
+docker compose up -d --wait api
+curl --fail-with-body http://127.0.0.1:8001/health/ready
+```
+
+En un Registry nuevo se crea la versión 1, configurada en `.env.example`.
+API: `http://127.0.0.1:8001/docs`; MLflow: `http://127.0.0.1:5001`.
+Para `/predict`, usa el JSON de MOP-004 con el puerto **8001**. PostgreSQL
+solo es accesible desde la red interna. Metadatos y artefactos están en
+volúmenes persistentes: `docker compose down` los conserva.
+
+Los clientes usan `MLFLOW_TRACKING_URI=http://mlflow:5000` dentro de Compose.
+MLflow sirve los artefactos mediante HTTP; la API no necesita montar las
+rutas locales de entrenamiento. El modo SQLite de MOP-003 sigue siendo el
+valor por defecto cuando no configuras ese endpoint.
+
+Prueba aislada de la pila real (crea y limpia sus propios volúmenes temporales):
+
+```bash
+uv run --locked python scripts/compose_smoke.py
+```
+
+La [guía de Compose](docs/mop-005-compose.md) explica la secuencia completa,
+cambio de versión, reinicio, copias, limpieza y diagnóstico.
+
 ## Comprobaciones
 
 ```bash
@@ -260,7 +333,9 @@ uv run --locked pytest
 
 Los tests comprueban instalación, contrato y rechazo de datos inválidos,
 estratificación, reproducibilidad, prevención de leakage, ambos modelos,
-métricas con ejemplos calculados a mano, persistencia y CLI integrada. Usan
+métricas con ejemplos calculados a mano, persistencia y CLI integrada. También
+comprueban el contrato HTTP, salud, carga única y paridad entre entrenamiento,
+Registry temporal y respuestas de la API. Usan
 datos empaquetados, directorios temporales y bloquean conexiones de red en los
 tests del proceso principal. CI ejecuta pytest con `UV_OFFLINE=1` una vez
 instaladas las dependencias. Pytest utiliza `importlib`; no se añade `src/` a
@@ -309,11 +384,14 @@ coordinada, verificando instalación y construcción.
 │   ├── mop-002-training.md     # Guía técnica y decisiones de entrenamiento
 │   ├── pr-mop-002.md           # Descripción de la entrega anterior
 │   ├── mop-003-mlflow.md       # Tracking, Registry y decisiones técnicas
-│   └── pr-mop-003.md           # Propuesta para revisión del PR de MOP-003
+│   ├── pr-mop-003.md           # Propuesta para revisión del PR de MOP-003
+│   └── mop-004-serving.md      # Auditoría, API, contratos y recuperación
 ├── pyproject.toml              # Paquete, grupo dev y configuración
 ├── README.md
 ├── src/modelops/
 │   ├── __init__.py              # Paquete y versión instalada
+│   ├── tabular.py               # Esquema del ejemplo compartido
+│   ├── serving/                 # Factoría FastAPI, predictor, contratos y CLI
 │   ├── tracking/
 │   │   ├── config.py          # SQLite, artifact location y UI localhost
 │   │   ├── adapter.py         # Tracking, Registry, consulta y recuperación
@@ -333,10 +411,10 @@ coordinada, verificando instalación y construcción.
 ```
 
 Las decisiones del stack y sus riesgos están en
-[ADR-001](docs/adr/001-architecture.md). Serving, servicios locales,
-infraestructura AWS, observabilidad y reentrenamiento quedan para entregas
+[ADR-001](docs/adr/001-architecture.md). Infraestructura AWS, observabilidad
+y reentrenamiento quedan para entregas
 posteriores. MLflow se integra desde una capa externa al entrenamiento;
-PostgreSQL y S3 son destinos futuros y no se utilizan en el desarrollo local.
+PostgreSQL se usa en Compose; S3 queda para una entrega posterior.
 
 `.gitignore` excluye secretos y artefactos habituales, pero los archivos que ya
 estén versionados no quedan protegidos por estas reglas. Las plantillas

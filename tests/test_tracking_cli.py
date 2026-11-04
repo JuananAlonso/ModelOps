@@ -107,14 +107,19 @@ def test_ui_builds_a_loopback_only_command(
     assert options["env"]["MLFLOW_SERVER_ENABLE_JOB_EXECUTION"] == "false"
 
 
-def test_cli_rejects_remote_backend_before_training(
+def test_cli_rejects_direct_postgres_backend_before_training(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
     local = tmp_path / "local"
     with pytest.raises(SystemExit) as error:
         cli.train_main(
-            ["--tracking-uri", "https://example.invalid", "--output-dir", str(local)]
+            [
+                "--tracking-uri",
+                "postgresql://example.invalid/db",
+                "--output-dir",
+                str(local),
+            ]
         )
     assert error.value.code == 2
-    assert "sqlite" in capsys.readouterr().err
+    assert "SQLite" in capsys.readouterr().err
     assert not local.exists()

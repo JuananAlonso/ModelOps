@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import pandas as pd
 from sklearn.datasets import load_breast_cancer
 
+from modelops.tabular import DEMO_FEATURE_NAMES, DEMO_TARGET_NAMES
+
 
 @dataclass(frozen=True)
 class TabularDataset:
@@ -36,6 +38,6 @@ def load_demo_dataset() -> TabularDataset:
         name="sklearn.datasets.load_breast_cancer",
         features=features,
         target=source.target.copy(),
-        feature_names=tuple(str(name) for name in source.feature_names),
-        target_names=tuple(str(name) for name in source.target_names),
+        feature_names=DEMO_FEATURE_NAMES,
+        target_names=DEMO_TARGET_NAMES,
     )

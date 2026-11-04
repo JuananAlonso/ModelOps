@@ -35,6 +35,7 @@ secrets/
 # Datos y artefactos ML locales
 /data/
 /artifacts/
+/backups/
 /models/
 /mlruns/
 /mlartifacts/

@@ -9,17 +9,22 @@ description = "Base modular para una plataforma MLOps."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "fastapi>=0.143,<1",
     "joblib>=1.5,<2",
     "lightgbm>=4.6,<5",
     "mlflow==3.16.1",
     "numpy>=2.2,<3",
     "pandas>=2.3,<4",
+    "psycopg2-binary>=2.9,<3",
+    "pydantic>=2.14,<3",
     "scikit-learn>=1.7,<2",
     "threadpoolctl>=3.6,<4",
+    "uvicorn>=0.54,<1",
 ]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28,<1",
     "pytest>=8.4,<9",
     "ruff>=0.14,<1",
 ]
@@ -29,6 +34,7 @@ modelops-train = "modelops.training.cli:main"
 modelops-train-mlflow = "modelops.tracking.cli:train_main"
 modelops-mlflow-runs = "modelops.tracking.cli:runs_main"
 modelops-mlflow-ui = "modelops.tracking.cli:ui_main"
+modelops-serve = "modelops.serving.cli:main"
 
 [[tool.uv.index]]
 url = "https://pypi.org/simple"
