@@ -1,4 +1,4 @@
-"""Configuración coherente y exclusivamente local de cliente y UI."""
+"""Configuración local y rechazo de endpoints inválidos."""
 
 from pathlib import Path
 
@@ -46,14 +46,14 @@ def test_environment_configuration_and_argument_priority(
 @pytest.mark.parametrize(
     "uri",
     [
-        "http://localhost:5000",
+        "http://user:password@localhost:5000",
         "postgresql://localhost/db",
         "sqlite:///:memory:",
         "sqlite:///",
         "",
     ],
 )
-def test_reject_non_persistent_or_non_sqlite_backend(uri: str) -> None:
+def test_reject_non_persistent_or_unsupported_backend(uri: str) -> None:
     with pytest.raises(ValueError):
         resolve_config(tracking_uri=uri)
 

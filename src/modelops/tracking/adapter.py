@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import mlflow.sklearn
 from mlflow import MlflowClient
+from mlflow.artifacts import download_artifacts
 from mlflow.entities import Metric, Param
 from mlflow.exceptions import MlflowException
 from mlflow.models import infer_signature
@@ -321,6 +322,17 @@ def load_registered_pipeline(
     source = make_client(config).get_model_version_download_uri(
         name, str(model_version)
     )
+    if config.remote_tracking_uri:
+        if not source.startswith("mlflow-artifacts:/"):
+            raise ValueError("El Registry remoto debe servir artefactos por MLflow.")
+        with TemporaryDirectory(prefix="modelops-serving-model-") as temporary:
+            local = download_artifacts(
+                artifact_uri=source,
+                dst_path=temporary,
+                tracking_uri=config.tracking_uri,
+                registry_uri=config.tracking_uri,
+            )
+            return mlflow.sklearn.load_model(local)
     return mlflow.sklearn.load_model(source)
 
 
