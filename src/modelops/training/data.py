@@ -10,7 +10,7 @@ from modelops.tabular import DEMO_FEATURE_NAMES, DEMO_TARGET_NAMES
 
 @dataclass(frozen=True)
 class TabularDataset:
-    """Tabla numérica y objetivo entero {0, 1}, alineados por índice único.
+    """Tabla y objetivo supervisado, alineados por índice único.
 
     Otro cargador puede producir este contrato sin cambiar entrenamiento.
     Los nombres del esquema son explícitos, independientes de la tabla recibida.
@@ -20,8 +20,12 @@ class TabularDataset:
     features: pd.DataFrame
     target: pd.Series
     feature_names: tuple[str, ...]
-    target_names: tuple[str, str]
+    target_names: tuple[str, ...]
     target_name: str = "target"
+    task: str = "classification"
+    categorical_features: tuple[str, ...] = ()
+    allow_missing: bool = False
+    source_options: dict | None = None
 
 
 def load_demo_dataset() -> TabularDataset:

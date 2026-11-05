@@ -33,6 +33,7 @@ secrets/
 .aws/
 
 # Datos y artefactos ML locales
+/data/iris/
 /data/
 /artifacts/
 /backups/

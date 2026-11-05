@@ -61,11 +61,15 @@ jobs:
       - run: uv sync --locked --no-editable
       - name: Train, register, predict, interrupt backend and restart Compose
         run: uv run --locked --no-editable python scripts/compose_smoke.py --report "${RUNNER_TEMP}/modelops-e2e.json"
+      - name: Audit CSV classification, multiclass and regression in Compose
+        run: uv run --locked --no-editable python scripts/compose_csv_smoke.py --report "${RUNNER_TEMP}/modelops-csv-e2e.json"
       - name: Preserve informational timings and result
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: modelops-e2e
-          path: ${{ runner.temp }}/modelops-e2e.json
+          path: |
+            ${{ runner.temp }}/modelops-e2e.json
+            ${{ runner.temp }}/modelops-csv-e2e.json
           if-no-files-found: warn
           retention-days: 14

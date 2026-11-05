@@ -18,6 +18,7 @@ from mlflow.exceptions import MlflowException
 from mlflow.models import infer_signature
 from sklearn.pipeline import Pipeline
 
+from modelops.model_contract import pipeline_contract
 from modelops.tracking.config import TrackingConfig
 
 if TYPE_CHECKING:
@@ -86,7 +87,7 @@ def _read_metadata(result: "TrainingResult", run_dir: Path) -> tuple[dict, dict]
         or metrics != result.metrics
     ):
         raise ValueError("Los artefactos locales no corresponden a TrainingResult.")
-    if set(result.models) != {"baseline", "lightgbm"}:
+    if not result.models or not set(result.models) <= {"baseline", "lightgbm"}:
         raise ValueError("Se esperan los candidatos baseline y lightgbm.")
     for relative, expected in manifest["artifacts_sha256"].items():
         path = (run_dir / relative).resolve()
@@ -105,7 +106,8 @@ def _common_tags(manifest: dict) -> dict[str, str]:
     tags = {
         "modelops.execution_id": manifest["run_id"],
         "modelops.dataset_sha256": manifest["dataset"]["sha256"],
-        "modelops.positive_label": "1",
+        "modelops.task": manifest["dataset"].get("task", "classification"),
+        "modelops.positive_label": str(manifest["dataset"]["positive_label"]),
         "modelops.python": manifest["environment"]["python"],
     }
     if manifest.get("git"):
@@ -115,7 +117,11 @@ def _common_tags(manifest: dict) -> dict[str, str]:
 
 
 def track_result(
-    result: "TrainingResult", local_run_dir: Path, config: TrackingConfig
+    result: "TrainingResult",
+    local_run_dir: Path,
+    config: TrackingConfig,
+    *,
+    registered_names: dict[str, str] | None = None,
 ) -> TrackedExecution:
     """Registrar un padre, hijos diferenciados y nuevas versiones sin promoción.
 
@@ -123,6 +129,8 @@ def track_result(
     Los fallos marcan los runs FAILED; versiones ya creadas quedan para inspección.
     """
     manifest, effective = _read_metadata(result, local_run_dir)
+    if registered_names is not None and set(registered_names) != set(result.models):
+        raise ValueError("Se requiere un nombre registrado por candidato.")
     client = make_client(config)
     experiment_id = ensure_experiment(client, config)
     tags = _common_tags(manifest)
@@ -140,7 +148,8 @@ def track_result(
         "test_size": result.config.test_size,
         "dataset_id": result.dataset.name,
         "dataset_sha256": result.dataset_sha256,
-        "positive_label": 1,
+        "task": result.dataset.task,
+        "positive_label": manifest["dataset"]["positive_label"],
         "python_version": manifest["environment"]["python"],
         **{
             f"version.{package}": version(package)
@@ -249,14 +258,22 @@ def track_result(
                         metadata={
                             "candidate": candidate,
                             "dataset_sha256": result.dataset_sha256,
-                            "positive_label": 1,
+                            "task": result.dataset.task,
+                            "positive_label": manifest["dataset"]["positive_label"],
                             "source_run_id": child_id,
                         },
+                    )
+                    (model_dir / "contract.json").write_text(
+                        pipeline_contract(pipeline).model_dump_json(indent=2) + "\n"
                     )
                     client.log_artifacts(
                         child_id, str(model_dir), artifact_path="pipeline"
                     )
-                name = f"{config.model_prefix}-{candidate}"
+                name = (
+                    registered_names[candidate]
+                    if registered_names is not None
+                    else f"{config.model_prefix}-{candidate}"
+                )
                 try:
                     client.create_registered_model(name)
                 except MlflowException as error:
@@ -273,7 +290,7 @@ def track_result(
                         "modelops.parent_run_id": parent_id,
                     },
                     description=(
-                        "Pipeline completo del ejemplo técnico; "
+                        f"Pipeline tabular de {result.dataset.task}; "
                         "sin promoción a producción."
                     ),
                     await_creation_for=30,

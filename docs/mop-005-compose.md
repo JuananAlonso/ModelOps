@@ -64,6 +64,57 @@ docker compose up -d --no-deps --force-recreate --wait api
 No se importan automáticamente los datos del SQLite anterior. El experimento
 de Compose se llama `modelops-compose`; conserva tu Registry local original.
 
+## Entrenamiento de un CSV propio
+
+La imagen de aplicación contiene el ejecutable `modelops` además de
+`modelops-train-mlflow`. El comando predeterminado del servicio `train` llama
+al segundo para cargar el dataset de demostración. `docker compose run`
+permite sustituir ese comando por el flujo CSV y pasarle un volumen de solo
+lectura con los datos.
+
+En un clon nuevo, `data/` puede estar vacío: está ignorado por Git para que los
+datos no se publiquen. Obtén tu CSV por separado y colócalo, por ejemplo, en
+`data/iris/iris.csv`. Construye la imagen y levanta MLflow y PostgreSQL:
+
+```bash
+docker compose build api
+docker compose up -d --wait mlflow
+```
+
+Entrena y registra el modelo con la CLI ejecutada dentro del contenedor:
+
+```bash
+docker compose run --rm \
+  -v "$PWD/data/iris:/data/iris:ro" \
+  train modelops train /data/iris/iris.csv \
+  --target species --algorithm lightgbm --name iris_v1
+```
+
+El nombre de experimento se fija a `modelops-compose` por la configuración de
+Compose. El modelo y sus artefactos se guardan en su Registry y volumen
+persistentes. La salida informa la versión registrada. Para hacer una
+predicción por lote dentro de otro contenedor:
+
+```bash
+docker compose run --rm \
+  -v "$PWD/data/iris:/data/iris:ro" \
+  train modelops predict /data/iris/nuevas_iris.csv \
+  --model iris_v1 --version 1
+```
+
+Para servir ese modelo en la API de Compose, inicia o recrea API con el nombre
+y versión fijados en el entorno:
+
+```bash
+MODELOPS_MODEL_NAME=iris_v1 MODELOPS_MODEL_VERSION=1 \
+  docker compose up -d --wait api
+curl --fail-with-body http://127.0.0.1:8001/health/ready
+```
+
+Si ya habías arrancado API con otra versión, Compose la recrea con esa
+configuración. El modelo y el Registry permanecen en Docker; el CSV solo se monta
+en el contenedor puntual de entrenamiento/predicción y permanece en el host.
+
 ## Topología y artefactos
 
 ```mermaid

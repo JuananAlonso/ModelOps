@@ -8,7 +8,127 @@ local y versiones iniciales de modelos con MLflow, desde una capa independiente.
 MOP-004 sirve una versión explícita mediante FastAPI, con validación de entradas
 y comprobaciones de salud, en un proceso separado del entrenamiento.
 MOP-005 permite ejecutar API, MLflow y PostgreSQL con Docker Compose y
-transferir artefactos por HTTP entre procesos.
+transferir artefactos por HTTP entre procesos. La CLI CSV permite entrenar
+clasificación binaria, multiclase y regresión con tablas propias, variables
+numéricas y categóricas, y valores ausentes.
+
+Para usarlo sin instalar Python ni uv en el host, sigue el recorrido
+[Docker Compose desde cero](#docker-compose-csv-propio-desde-cero).
+
+## Quickstart con un CSV propio
+
+Desde la raíz del proyecto, con un CSV UTF-8 separado por comas:
+
+```bash
+uv sync --locked
+uv run --locked modelops inspect clientes.csv
+uv run --locked modelops train clientes.csv --target churn \
+  --algorithm lightgbm --name churn --exclude id_cliente
+uv run --locked modelops predict nuevos_clientes.csv --model churn --version 1
+```
+
+`1` representa la versión devuelta por el entrenamiento. Cada entrenamiento
+imprime el comando para predecir con la **versión realmente registrada** y el
+backend efectivo. Sustituye `nuevos_clientes.csv` por tu archivo de variables
+de entrada. Registrar un modelo no cambia la versión que sirve la API.
+
+`inspect` presenta una tabla alineada con el tipo inferido de cada columna,
+valores ausentes, cardinalidad y posibles objetivos. Estos candidatos son
+orientativos; `inspect` no selecciona el objetivo ni entrena. `train` exige
+objetivo, algoritmo y nombre. Para clasificación
+binaria o multiclase admite `logistic-regression` y `lightgbm`; para regresión,
+usa `--task regression` con `linear-regression` o `lightgbm`. La semilla
+predeterminada es **42** y test usa **0.2** (estratificado en clasificación).
+Repite `--exclude` para ignorar columnas y `--categorical` para forzar categorías
+como códigos postales; `--numeric` exige números válidos. Se imputan ausentes
+y se codifican categorías con estadísticas aprendidas solo de train. `predict`
+exige exactamente las columnas del contrato guardado; acepta otro orden y conserva
+el orden de las filas. Elimina del CSV de predicción el objetivo y las columnas
+excluidas, incluidos identificadores.
+
+Si omites `--experiment-name`, `train` usa un experimento derivado del
+algoritmo y modelo, por ejemplo `modelops-lightgbm-iris_v1`. También respeta
+`MLFLOW_EXPERIMENT_NAME` cuando configuras esa variable.
+
+Para CSV de otros formatos, usa `--delimiter ';' --decimal ','` o
+`--delimiter tab`, y `--encoding latin-1` si corresponde. Estas opciones
+funcionan en inspect, train y predict. Por defecto se usa UTF-8 y coma.
+
+Para automatizar, añade `--json`: stdout contiene solo el resultado JSON;
+progreso y errores van a stderr. Los errores esperables devuelven código `2`.
+Cada subcomando incluye un ejemplo en `--help`.
+
+### Demo incluida: dos esquemas distintos, sin editar Python
+
+Los archivos de `examples/csv/` son datos sintéticos. Desde un clon limpio:
+
+```bash
+uv sync --locked
+uv run --locked modelops inspect examples/csv/clientes.csv
+uv run --locked modelops train examples/csv/clientes.csv --target churn \
+  --algorithm lightgbm --name churn --exclude id_cliente \
+  --storage-dir artifacts/csv-demo --experiment-name csv-demo
+uv run --locked modelops predict examples/csv/nuevos_clientes.csv \
+  --model churn --version 1 --storage-dir artifacts/csv-demo
+
+uv run --locked modelops inspect examples/csv/pedidos.csv
+uv run --locked modelops train examples/csv/pedidos.csv --target devuelto \
+  --algorithm logistic-regression --name devoluciones \
+  --storage-dir artifacts/csv-demo --experiment-name csv-demo
+uv run --locked modelops predict examples/csv/nuevos_pedidos.csv \
+  --model devoluciones --version 1 --storage-dir artifacts/csv-demo
+```
+
+En la primera ejecución ambos modelos tendrán versión 1. Si repites el
+entrenamiento, utiliza la versión y el comando que imprima. Los CSV nuevos
+incluidos ya tienen las variables en otro orden para mostrar su reordenación.
+`--storage-dir` aísla la demo local; si tienes `MLFLOW_TRACKING_URI` configurado,
+este prevalece. `--tracking-uri` permite elegir explícitamente otro backend.
+
+Para servir la versión de clientes en otro proceso:
+
+```bash
+uv run --locked modelops-serve --model-name churn --model-version 1 \
+  --storage-dir artifacts/csv-demo --port 8002
+```
+
+En `http://127.0.0.1:8002/docs` aparece el esquema de esa versión; también se
+puede consultar con `GET /model/schema`. Para probarla desde otra terminal:
+
+```bash
+curl --fail-with-body http://127.0.0.1:8002/predict \
+  -H 'Content-Type: application/json' \
+  -d '{"instances":[{"antiguedad":2,"edad":25},{"edad":67,"antiguedad":8}]}'
+```
+
+La CLI y HTTP leen el mismo contrato embebido en el pipeline. Los modelos
+antiguos del dataset integrado siguen cargando con su esquema original.
+Consulta el [contrato CSV y las decisiones técnicas](docs/csv-cli.md) para
+la codificación de etiquetas, configuración, artefactos y límites.
+
+### Nuevos ejemplos: categorías, ausentes y regresión
+
+```bash
+uv run --locked modelops train examples/csv/segmentos.csv --target segmento \
+  --algorithm logistic-regression --name segmentos --exclude id \
+  --categorical codigo_postal --storage-dir artifacts/csv-general
+uv run --locked modelops predict examples/csv/nuevos_segmentos.csv \
+  --model segmentos --version 1 --storage-dir artifacts/csv-general
+
+uv run --locked modelops train examples/csv/viviendas.csv --target precio \
+  --task regression --algorithm linear-regression --name viviendas \
+  --exclude id --delimiter ';' --decimal ',' --storage-dir artifacts/csv-general
+uv run --locked modelops predict examples/csv/nuevas_viviendas.csv \
+  --model viviendas --version 1 --delimiter ';' --decimal ',' \
+  --storage-dir artifacts/csv-general
+```
+
+La regresión devuelve valores predichos y métricas MAE/RMSE/R². La clasificación
+multiclase conserva etiquetas originales y devuelve una probabilidad por clase.
+La API adapta su validación al modelo cargado y admite `null` para imputar.
+Consulta el [plan, formatos admitidos y límites](docs/csv-cli.md): se requiere
+una tabla supervisada con objetivo explícito; no se interpreta texto libre ni
+se infiere el problema de negocio a partir de un archivo.
 
 ## Requisitos
 
@@ -289,39 +409,142 @@ Consulta la [guía de MOP-004](docs/mop-004-serving.md) para el ejemplo `curl`
 completo, configuración, errores, pruebas de paridad y auditoría del siguiente
 paso. Docker Compose y PostgreSQL corresponden a MOP-005.
 
-## Docker Compose — MOP-005
+## Docker Compose: CSV propio desde cero
 
-Desde la raíz del repositorio, con Docker y Compose instalados:
+Necesitas Docker Engine en ejecución, Docker Compose y acceso al motor.
+Estos pasos ejecutan entrenamiento e inferencia dentro de contenedores; no
+requieren instalar Python ni uv en el host. Ejecútalos desde la raíz del clon.
+
+### 1. Construir y arrancar MLflow
 
 ```bash
 cp -n .env.example .env
-docker compose build
+docker compose build api
 docker compose up -d --wait mlflow
-docker compose run --rm train
-# Revisa nombre/versión en la salida y fíjalos en .env antes de iniciar API.
-docker compose up -d --wait api
-curl --fail-with-body http://127.0.0.1:8001/health/ready
 ```
 
-En un Registry nuevo se crea la versión 1, configurada en `.env.example`.
-API: `http://127.0.0.1:8001/docs`; MLflow: `http://127.0.0.1:5001`.
-Para `/predict`, usa el JSON de MOP-004 con el puerto **8001**. PostgreSQL
-solo es accesible desde la red interna. Metadatos y artefactos están en
-volúmenes persistentes: `docker compose down` los conserva.
+La imagen construida por `api` es compartida por MLflow y `train`. Compose
+arranca PostgreSQL como dependencia. Espera a entrenar antes de arrancar API:
+su readiness exige que el modelo ya exista. Los puertos del host se configuran
+en `.env` (API 8001 y MLflow 5001 por defecto).
 
-Los clientes usan `MLFLOW_TRACKING_URI=http://mlflow:5000` dentro de Compose.
-MLflow sirve los artefactos mediante HTTP; la API no necesita montar las
-rutas locales de entrenamiento. El modo SQLite de MOP-003 sigue siendo el
-valor por defecto cuando no configuras ese endpoint.
+### 2. Inspeccionar y entrenar
 
-Prueba aislada de la pila real (crea y limpia sus propios volúmenes temporales):
+Este ejemplo funciona con los CSV sintéticos incluidos en cualquier clon:
 
 ```bash
-uv run --locked python scripts/compose_smoke.py
+docker compose run --rm -v "$PWD/examples/csv:/csv:ro" \
+  train modelops inspect /csv/segmentos.csv
+docker compose run --rm -v "$PWD/examples/csv:/csv:ro" \
+  train modelops train /csv/segmentos.csv --target segmento \
+  --algorithm lightgbm --name segmentos --exclude id --categorical codigo_postal
 ```
 
-La [guía de Compose](docs/mop-005-compose.md) explica la secuencia completa,
-cambio de versión, reinicio, copias, limpieza y diagnóstico.
+`train` es el nombre del servicio; `modelops train ...` reemplaza su comando
+predeterminado. Ejecutar solo `docker compose run --rm train` entrena el antiguo
+dataset de demostración. El montaje `:ro` permite leer los CSV del host sin
+modificarlos; dentro del contenedor la carpeta se llama `/csv`.
+
+Compose configura el experimento compartido `modelops-compose`. Puedes elegir
+otro con `--experiment-name`. El nombre `--name segmentos` identifica el modelo
+en el Registry. Apunta la **versión devuelta** por el entrenamiento: en un
+Registry nuevo será 1; al repetir se crean 2, 3, etc.
+
+### 3. Predecir con la CLI de la imagen
+
+```bash
+docker compose run --rm -v "$PWD/examples/csv:/csv:ro" \
+  train modelops predict /csv/nuevos_segmentos.csv --model segmentos --version 1
+```
+
+Sustituye `1` por la versión que quieras usar. El archivo de predicción lleva
+exactamente las variables de entrada, sin objetivo ni columnas excluidas.
+No es necesario que las columnas estén en el mismo orden.
+
+La URI `http://mlflow:5000` que muestra el entrenamiento funciona dentro de la
+red de Compose. Para ejecutar desde el host el comando de predicción, usa el
+recorrido `docker compose run` anterior con el montaje del CSV.
+
+### 4. Desplegar la API del modelo
+
+Escribe en `.env` el nombre y versión devueltos, para conservar la selección
+en futuros arranques:
+
+```text
+MODELOPS_MODEL_NAME=segmentos
+MODELOPS_MODEL_VERSION=1
+```
+
+```bash
+docker compose up -d --wait api
+curl --fail-with-body http://127.0.0.1:8001/health/ready
+curl --fail-with-body http://127.0.0.1:8001/predict \
+  -H 'Content-Type: application/json' \
+  -d '{"instances":[{"edad":24,"gasto":130,"canal":"web","codigo_postal":"001"}]}'
+```
+
+La API documenta las variables y sus tipos en <http://127.0.0.1:8001/docs> y
+`GET /model/schema`. MLflow y sus modelos están en <http://127.0.0.1:5001>.
+Para cambiar de modelo o versión, edita `.env` y repite `up -d --wait api`;
+registrar un modelo nuevo no cambia automáticamente el que sirve la API.
+
+### Usar tus propios datos, Iris o regresión
+
+Pon tus CSV en una carpeta local, por ejemplo `data/iris/`. Esa carpeta está
+ignorada por Git y no aparece en un clon nuevo. Reemplaza el montaje del ejemplo
+por `-v "$PWD/data/iris:/csv:ro"` y los nombres de archivo/columnas por los tuyos.
+Para Iris usa `/csv/iris.csv --target species --algorithm lightgbm --name iris_v1`.
+Un archivo nuevo de Iris podría ser:
+
+```csv
+sepal_length,sepal_width,petal_length,petal_width
+5.1,3.5,1.4,0.2
+6.7,3.0,5.2,2.3
+```
+
+Guárdalo en `data/iris/nuevas_iris.csv` y predice con `/csv/nuevas_iris.csv`,
+`--model iris_v1` y la versión registrada. Para una carpeta situada en otra
+ruta usa su ruta absoluta en la parte izquierda del montaje. El usuario del
+contenedor debe tener permiso de lectura sobre la carpeta y los archivos.
+
+La clasificación binaria y multiclase usa `logistic-regression` o `lightgbm`.
+Para regresión numérica se usa `--task regression` con `linear-regression` o
+`lightgbm`. Ejemplo incluido con punto y coma, coma decimal, categorías y ausentes:
+
+```bash
+docker compose run --rm -v "$PWD/examples/csv:/csv:ro" \
+  train modelops train /csv/viviendas.csv --target precio --task regression \
+  --algorithm linear-regression --name viviendas --exclude id \
+  --delimiter ';' --decimal ','
+docker compose run --rm -v "$PWD/examples/csv:/csv:ro" \
+  train modelops predict /csv/nuevas_viviendas.csv --model viviendas --version 1 \
+  --delimiter ';' --decimal ','
+```
+
+Los CSV admitidos son tablas con cabecera única, objetivo explícito y suficientes
+filas para train/test. Se aceptan números, categorías y ausentes en variables;
+el objetivo debe estar completo. Fechas y texto libre se tratan como categorías,
+sin interpretación semántica. No se garantiza entrenar datos arbitrarios o un
+modelo útil para cualquier problema. Consulta los [formatos y límites CSV](docs/csv-cli.md).
+
+El Registry Docker es independiente del SQLite local del host. Sus modelos,
+metadatos y artefactos se conservan en los volúmenes de PostgreSQL y MLflow.
+Los archivos locales del entrenamiento dentro del contenedor puntual se borran
+con `--rm`, después de que el registro haya copiado los artefactos a MLflow.
+`docker compose down` conserva los volúmenes; `down --volumes` elimina sus datos.
+
+La [guía de Compose](docs/mop-005-compose.md) amplía configuración, copias y
+resolución de errores. La auditoría reproducible de CSV se ejecuta con:
+
+```bash
+python3 scripts/compose_csv_smoke.py
+```
+
+Crea un proyecto aislado, comprueba CLI y HTTP con ambos algoritmos para cada
+tarea, formatos alternativos y persistencia, y limpia solo sus propios recursos.
+El informe queda en `artifacts/e2e/csv-compose.json`.
+Esta auditoría opcional usa Python 3 del host para orquestar Docker; el
+entrenamiento, el registro y la inferencia se ejecutan en contenedores.
 
 ## Pruebas E2E y robustez — MOP-006
 

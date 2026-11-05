@@ -5,15 +5,20 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from modelops.serving.config import ServingConfig, resolve_serving_config
-from modelops.serving.contracts import ModelIdentity, PredictRequest, PredictResponse
+from modelops.serving.contracts import (
+    ModelIdentity,
+    PredictRequest,
+    PredictResponse,
+    RegressionPredictResponse,
+    make_request_model,
+)
 from modelops.serving.predictor import Predictor
-from modelops.tabular import DEMO_FEATURE_NAMES, DEMO_TARGET_NAMES
 from modelops.tracking.adapter import load_registered_pipeline
 
 logger = logging.getLogger(__name__)
@@ -54,16 +59,23 @@ def create_app(config: ServingConfig | None = None) -> FastAPI:
                 selected.model_version,
                 type(error).__name__,
             )
+        if app.state.predictor is not None:
+            install_predict_route(
+                make_request_model(
+                    app.state.predictor.contract.feature_names,
+                    app.state.predictor.contract,
+                )
+            )
         try:
             yield
         finally:
             app.state.predictor = None
 
     app = FastAPI(
-        title="ModelOps — inferencia de demostración",
+        title="ModelOps — inferencia tabular",
         version="1",
         description=(
-            "Ejemplo técnico sin uso clínico. Versión de modelo fijada al inicio."
+            "Clasificación y regresión tabular. Versión de modelo fijada al inicio."
         ),
         lifespan=lifespan,
     )
@@ -99,33 +111,45 @@ def create_app(config: ServingConfig | None = None) -> FastAPI:
         require_predictor()
         return {"status": "ready", "model": identity.model_dump()}
 
-    @app.post(
-        "/predict",
-        response_model=PredictResponse,
-        responses={
-            503: {"description": "Modelo no disponible"},
-            500: {"description": "Fallo de inferencia"},
-        },
-    )
-    def predict(body: PredictRequest) -> PredictResponse:
-        predictor = require_predictor()
-        features = pd.DataFrame(
-            [row.model_dump(by_alias=True) for row in body.instances],
-            columns=DEMO_FEATURE_NAMES,
-        )
-        try:
-            predictions = predictor.predict(features)
-        except Exception as error:
-            logger.error("Fallo de inferencia (%s).", type(error).__name__)
-            app.state.predictor = None
-            raise HTTPException(
-                status_code=500, detail="No se pudo completar la inferencia."
-            ) from None
-        return PredictResponse(
-            model=identity,
-            classes=predictor.classes,
-            class_names=[DEMO_TARGET_NAMES[label] for label in predictor.classes],
-            predictions=predictions,
-        )
+    @app.get("/model/schema")
+    async def model_schema() -> dict:
+        return require_predictor().contract.model_dump(mode="json")
 
+    def install_predict_route(request_model: type) -> None:
+        # La versión queda fijada en el lifespan: también fija su validación y OpenAPI.
+        def predict(body: request_model) -> PredictResponse | RegressionPredictResponse:
+            predictor = require_predictor()
+            features = pd.DataFrame(
+                [row.model_dump(by_alias=True) for row in body.instances],
+                columns=predictor.contract.feature_names,
+            )
+            try:
+                response = predictor.response(features, identity)
+            except Exception as error:
+                logger.error("Fallo de inferencia (%s).", type(error).__name__)
+                app.state.predictor = None
+                raise HTTPException(
+                    status_code=500, detail="No se pudo completar la inferencia."
+                ) from None
+            return response
+
+        app.router.routes[:] = [
+            route
+            for route in app.router.routes
+            if getattr(route, "path", None) != "/predict"
+        ]
+        app.add_api_route(
+            "/predict",
+            predict,
+            methods=["POST"],
+            response_model=PredictResponse | RegressionPredictResponse,
+            dependencies=[Depends(require_predictor)],
+            responses={
+                503: {"description": "Modelo no disponible"},
+                500: {"description": "Fallo de inferencia"},
+            },
+        )
+        app.openapi_schema = None
+
+    install_predict_route(PredictRequest)
     return app

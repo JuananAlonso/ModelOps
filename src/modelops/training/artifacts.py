@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import platform
 import subprocess
 import tomllib
@@ -12,7 +13,9 @@ from pathlib import Path
 from uuid import uuid4
 
 import joblib
+from sklearn.pipeline import Pipeline
 
+from modelops.model_contract import pipeline_contract
 from modelops.training.runner import TrainingResult
 
 
@@ -24,6 +27,35 @@ def _write_json(path: Path, value: object) -> None:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _transform_config(transformer) -> dict:
+    if isinstance(transformer, str):
+        return {"type": transformer}
+    if isinstance(transformer, Pipeline):
+        return {
+            "type": "Pipeline",
+            "steps": {
+                name: _transform_config(step) for name, step in transformer.steps
+            },
+        }
+    return {
+        "type": type(transformer).__name__,
+        "parameters": {
+            key: _json_parameter(value)
+            for key, value in transformer.get_params(deep=False).items()
+        },
+    }
+
+
+def _json_parameter(value):
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, type):
+        return f"{value.__module__}.{value.__qualname__}"
+    if isinstance(value, (list, tuple)):
+        return [_json_parameter(item) for item in value]
+    return value
 
 
 def _git_metadata(project_root: Path | None) -> dict[str, object] | None:
@@ -84,19 +116,16 @@ def persist_result(
     for name, model in result.models.items():
         with (models_dir / f"{name}.joblib").open("xb") as stream:
             joblib.dump(model, stream, compress=3)
-        transformation = model.named_steps["preprocess"].transformers[0][1]
         model_config[name] = {
             "estimator": type(model.named_steps["model"]).__name__,
             "parameters": model.named_steps["model"].get_params(deep=False),
             "preprocessing": {
-                "numeric": (
-                    {
-                        "type": type(transformation).__name__,
-                        "parameters": transformation.get_params(deep=False),
-                    }
-                    if transformation != "passthrough"
-                    else {"type": "passthrough"}
-                ),
+                **{
+                    key: _transform_config(transformation)
+                    for key, transformation, _ in model.named_steps[
+                        "preprocess"
+                    ].transformers
+                },
                 "feature_names": list(result.dataset.feature_names),
                 "remainder": "drop",
             },
@@ -106,8 +135,10 @@ def persist_result(
         {
             **asdict(result.config),
             "dataset": result.dataset.name,
-            "positive_label": 1,
-            "prediction_rule": "estimator.predict (binary probability > 0.5)",
+            "task": result.dataset.task,
+            "source_options": result.dataset.source_options,
+            "positive_label": 1 if len(result.dataset.target_names) == 2 else None,
+            "prediction_rule": "estimator.predict",
             "native_thread_limit": 1,
             "selection": "none; fixed candidates evaluated once on held-out test",
             "models": model_config,
@@ -115,9 +146,18 @@ def persist_result(
     )
     _write_json(run_dir / "metrics.json", result.metrics)
     _write_json(
+        run_dir / "contracts.json",
+        {
+            name: pipeline_contract(model).model_dump(mode="json")
+            for name, model in result.models.items()
+        },
+    )
+    _write_json(
         run_dir / "split.json",
         {
-            "strategy": "stratified_shuffle_split",
+            "strategy": "stratified_shuffle_split"
+            if result.dataset.task == "classification"
+            else "shuffle_split",
             "train_positions": result.split.train_positions.tolist(),
             "test_positions": result.split.test_positions.tolist(),
         },
@@ -141,14 +181,22 @@ def persist_result(
             "feature_dtypes": [str(dtype) for dtype in dataset.features.dtypes],
             "target_name": dataset.target_name,
             "target_dtype": str(dataset.target.dtype),
+            "task": dataset.task,
+            "categorical_features": list(dataset.categorical_features),
+            "allow_missing": dataset.allow_missing,
+            "source_options": dataset.source_options,
             "class_names": dict(enumerate(dataset.target_names)),
-            "positive_label": 1,
+            "positive_label": 1 if len(dataset.target_names) == 2 else None,
         },
         "split": {
             "train_rows": len(result.split.x_train),
             "test_rows": len(result.split.x_test),
-            "train_class_counts": result.split.y_train.value_counts().to_dict(),
-            "test_class_counts": result.split.y_test.value_counts().to_dict(),
+            "train_class_counts": result.split.y_train.value_counts().to_dict()
+            if dataset.task == "classification"
+            else None,
+            "test_class_counts": result.split.y_test.value_counts().to_dict()
+            if dataset.task == "classification"
+            else None,
         },
         "environment": {
             "python": platform.python_version(),
