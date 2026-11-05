@@ -284,12 +284,41 @@ La API local estará en <http://127.0.0.1:8000/docs>. Si utilizaste
 `--storage-dir` o `--tracking-uri`, usa la misma configuración al predecir o
 servir. `MLFLOW_EXPERIMENT_NAME` permite fijar un experimento local explícito.
 
-## Desarrollo
+## Estructura del proyecto
 
-El código se organiza en `src/modelops/`: `training/` entrena y evalúa,
-`tracking/` integra MLflow y `serving/` expone la API. `cli.py`, `csv_data.py` y
-`model_contract.py` conectan los flujos con un contrato común. Los ejemplos están
-en `examples/csv/` y las pruebas en `tests/`.
+Archivos y directorios principales:
+
+```text
+ModelOps/
+├── .github/workflows/ci.yml     # Pruebas, empaquetado y auditorías Docker
+├── .env.example                # Plantilla de configuración local
+├── .gitignore                  # Datos, secretos y artefactos excluidos de Git
+├── .python-version             # Versión fijada de Python
+├── Dockerfile                  # Imagen compartida por la CLI, MLflow y la API
+├── compose.yaml                # Servicios y volúmenes de Docker Compose
+├── pyproject.toml              # Dependencias, ejecutables y herramientas
+├── uv.lock                     # Versiones y hashes de dependencias
+├── README.md                   # Guía de uso
+├── docs/                       # Contratos, arquitectura y operación
+├── examples/csv/               # CSV sintéticos de entrenamiento y predicción
+├── scripts/
+│   ├── compose_csv_smoke.py     # Auditoría de CSV propios en Docker
+│   └── compose_smoke.py         # Auditoría de servicios y recuperación
+├── src/modelops/
+│   ├── cli.py                  # Comandos inspect, train y predict
+│   ├── csv_data.py             # Lectura y validación de CSV
+│   ├── model_contract.py       # Esquema compartido por CLI y API
+│   ├── tabular.py              # Esquema del dataset de demostración
+│   ├── training/               # Partición, preprocesamiento, modelos y métricas
+│   ├── tracking/               # Configuración y registro en MLflow
+│   └── serving/                # API HTTP, validación e inferencia
+└── tests/                      # Pruebas unitarias y de integración
+```
+
+Las carpetas locales `data/` y `artifacts/` se crean al trabajar con datos y
+entrenamientos y permanecen ignoradas por Git.
+
+## Desarrollo
 
 ```bash
 uv sync --locked
