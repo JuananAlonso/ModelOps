@@ -1,11 +1,14 @@
-"""Evaluación común; la clase positiva siempre es la etiqueta entera 1."""
+"""Métricas por tarea; en clasificación binaria la clase positiva es 1."""
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
+    mean_absolute_error,
+    mean_squared_error,
     precision_score,
+    r2_score,
     recall_score,
     roc_auc_score,
 )
@@ -60,9 +63,44 @@ def binary_metrics(
 
 
 def evaluate_model(
-    model: Pipeline, features: pd.DataFrame, target: pd.Series
+    model: Pipeline,
+    features: pd.DataFrame,
+    target: pd.Series,
+    *,
+    task: str = "classification",
 ) -> dict[str, float | None]:
+    if task == "regression":
+        predicted = model.predict(features)
+        r2 = float(r2_score(target, predicted))
+        return {
+            "mae": float(mean_absolute_error(target, predicted)),
+            "rmse": float(np.sqrt(mean_squared_error(target, predicted))),
+            "r2": r2 if np.isfinite(r2) else None,
+        }
     classes = list(model.classes_)
+    if len(classes) > 2:
+        predicted = model.predict(features)
+        return {
+            "accuracy": float(accuracy_score(target, predicted)),
+            "precision_macro": float(
+                precision_score(target, predicted, average="macro", zero_division=0)
+            ),
+            "recall_macro": float(
+                recall_score(target, predicted, average="macro", zero_division=0)
+            ),
+            "f1_macro": float(
+                f1_score(target, predicted, average="macro", zero_division=0)
+            ),
+            "roc_auc_ovr_macro": float(
+                roc_auc_score(
+                    target,
+                    model.predict_proba(features),
+                    labels=classes,
+                    multi_class="ovr",
+                    average="macro",
+                )
+            ),
+        }
     if set(classes) != {0, 1}:
         raise ValueError("El modelo debe haberse entrenado con las clases 0 y 1.")
     return binary_metrics(

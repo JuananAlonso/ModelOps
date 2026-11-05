@@ -30,6 +30,7 @@ dev = [
 ]
 
 [project.scripts]
+modelops = "modelops.cli:main"
 modelops-train = "modelops.training.cli:main"
 modelops-train-mlflow = "modelops.tracking.cli:train_main"
 modelops-mlflow-runs = "modelops.tracking.cli:runs_main"

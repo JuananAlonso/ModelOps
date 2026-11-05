@@ -42,6 +42,7 @@ def test_integrated_cli_from_outside_repository(tmp_path: Path) -> None:
     assert manifest["git"] is None
     assert set(path.name for path in run_dir.iterdir()) == {
         "config.json",
+        "contracts.json",
         "metrics.json",
         "manifest.json",
         "split.json",
